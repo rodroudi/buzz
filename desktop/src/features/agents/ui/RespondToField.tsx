@@ -20,8 +20,9 @@ import type { PersonaDropdownOption } from "./agentConfigOptions";
  * Inbound author gate UI for create/edit agent dialogs.
  *
  * Dropdown:
- *   - Owner only  (default; matches `buzz-acp --respond-to=owner-only`)
- *   - Anyone      (`--respond-to=anyone` — fully open bot)
+ *   - Owner only  (`--respond-to=owner-only`)
+ *   - Anyone      (default on the BP fork; `--respond-to=anyone` — fully
+ *                  open bot on our closed team relay)
  *   - Allowlist   (`--respond-to=allowlist`, plus the chip list as
  *                  `--respond-to-allowlist`)
  *
@@ -51,8 +52,8 @@ function formatSearchUserSecondary(user: UserSearchResult) {
 }
 
 const RESPOND_TO_OPTIONS: PersonaDropdownOption[] = [
-  { label: "Only me (default)", value: "owner-only" },
-  { label: "Anyone", value: "anyone" },
+  { label: "Only me", value: "owner-only" },
+  { label: "Anyone (default)", value: "anyone" },
   { label: "Allowlist", value: "allowlist" },
 ];
 
@@ -162,8 +163,8 @@ export function CreateAgentRespondToField({
           onChange={(e) => onModeChange(e.target.value as RespondToMode)}
           value={mode}
         >
-          <option value="owner-only">Owner only (default)</option>
-          <option value="anyone">Anyone</option>
+          <option value="owner-only">Owner only</option>
+          <option value="anyone">Anyone (default)</option>
           <option value="allowlist">Allowlist</option>
         </select>
       )}

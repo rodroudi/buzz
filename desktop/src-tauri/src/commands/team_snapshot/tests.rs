@@ -330,8 +330,13 @@ fn team_import_keeps_or_clears_every_member_allowlist_with_one_toggle() {
         definition.respond_to.as_deref() == Some("allowlist")
             && definition.respond_to_allowlist == vec!["ab".repeat(32)]
     }));
+    // Clearing an allowlist downgrades the member to owner-only (an agent
+    // its author explicitly restricted must not open up on import). Since
+    // the BP fork default is `anyone`, that downgrade is now carried
+    // explicitly on the wire instead of being omitted as "the default".
     assert!(cleared.iter().all(|definition| {
-        definition.respond_to.is_none() && definition.respond_to_allowlist.is_empty()
+        definition.respond_to.as_deref() == Some("owner-only")
+            && definition.respond_to_allowlist.is_empty()
     }));
 }
 

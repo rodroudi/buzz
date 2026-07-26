@@ -225,7 +225,9 @@ export async function buildWelcomeStarterCreateInput(
     relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
-    respondTo: "owner-only",
+    // BP fork policy: starter agents answer any workspace member. The two
+    // teammates are rewired to allowlist-of-lead right after creation.
+    respondTo: "anyone",
   };
 }
 

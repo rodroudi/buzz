@@ -205,6 +205,8 @@ test("all Welcome starters use the onboarding runtime preference", async () => {
     assert.equal(input.relayUrl, RELAY_A);
     assert.equal(input.spawnAfterCreate, false);
     assert.equal(input.startOnAppLaunch, false);
+    // BP fork policy: starters answer any workspace member by default.
+    assert.equal(input.respondTo, "anyone");
   }
 });
 

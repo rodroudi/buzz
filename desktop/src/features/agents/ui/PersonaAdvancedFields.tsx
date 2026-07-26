@@ -52,7 +52,7 @@ export function PersonaAdvancedFields({
       <CreateAgentRespondToField
         allowlist={behaviorDraft.respondToAllowlist}
         disabled={disabled}
-        mode={behaviorDraft.respondTo ?? "owner-only"}
+        mode={behaviorDraft.respondTo ?? "anyone"}
         onAllowlistChange={(allowlist) =>
           onBehaviorDraftChange({
             ...behaviorDraft,

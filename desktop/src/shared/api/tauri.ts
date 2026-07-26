@@ -152,7 +152,7 @@ export type RawManagedAgent = {
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
   // Optional: pre-feature mock fixtures may omit these. Mapped to
-  // `"owner-only"` / `[]` in `fromRawManagedAgent`.
+  // `"anyone"` / `[]` in `fromRawManagedAgent` (BP fork default).
   respond_to?: ManagedAgent["respondTo"];
   respond_to_allowlist?: string[];
 };
@@ -722,7 +722,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     backendAgentId: agent.backend_agent_id,
     // Fallbacks for pre-feature mocks/fixtures that don't carry these fields.
     // Real agent records always include them (defaulted server-side).
-    respondTo: agent.respond_to ?? "owner-only",
+    respondTo: agent.respond_to ?? "anyone",
     respondToAllowlist: agent.respond_to_allowlist ?? [],
   };
 }

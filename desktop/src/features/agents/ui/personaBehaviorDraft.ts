@@ -4,7 +4,7 @@ import type { PersonaBehaviorInput, RespondToMode } from "@/shared/api/types";
  * Dialog-side draft of a definition's NIP-AP behavioral group.
  *
  * `respondTo: null` means "unset" — the definition carries no mode and the
- * harness default (owner-only) applies at mint. The distinction matters for
+ * mint default (BP fork: anyone) applies at mint. The distinction matters for
  * wire bytes, not semantics: a definition without behavioral fields must
  * stay without behavioral fields
  * through unrelated edits so its published content (and content hash) does

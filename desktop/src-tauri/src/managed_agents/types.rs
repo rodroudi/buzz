@@ -761,14 +761,19 @@ fn default_record_active() -> bool {
 // `nobody` is intentionally NOT exposed here. The harness supports it, but
 // it's a heartbeat-only mode and the desktop has no surface for it.
 
-/// Who the agent should respond to. Defaults to `OwnerOnly`, which matches
-/// the harness default → existing agents behave identically.
+/// Who the agent should respond to.
+///
+/// BP fork policy (bp-build): defaults to `Anyone` — this deployment is a
+/// closed, invite-only team relay and agents are expected to answer any
+/// workspace member. Upstream (and the harness's own fallback) default to
+/// `OwnerOnly`; the desktop always passes an explicit mode to the harness
+/// at spawn, so the two defaults never meet.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RespondTo {
-    #[default]
     OwnerOnly,
     Allowlist,
+    #[default]
     Anyone,
 }
 

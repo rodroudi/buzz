@@ -96,8 +96,10 @@ fn managed_agent_record_with_auth_tag_round_trips() {
 use super::{validate_respond_to_allowlist, RespondTo};
 
 #[test]
-fn respond_to_default_is_owner_only() {
-    assert_eq!(RespondTo::default(), RespondTo::OwnerOnly);
+fn respond_to_default_is_anyone() {
+    // BP fork policy (bp-build): agents on the closed team relay respond to
+    // any workspace member by default. Upstream defaults to OwnerOnly.
+    assert_eq!(RespondTo::default(), RespondTo::Anyone);
 }
 
 #[test]
@@ -131,9 +133,9 @@ fn respond_to_rejects_unknown_modes() {
 }
 
 /// Records persisted before this feature must continue to load,
-/// defaulting to OwnerOnly (the safe, matches-harness-default value).
+/// defaulting to Anyone (BP fork policy — see `RespondTo::default`).
 #[test]
-fn managed_agent_record_without_respond_to_fields_defaults_to_owner_only() {
+fn managed_agent_record_without_respond_to_fields_defaults_to_anyone() {
     let record: ManagedAgentRecord = serde_json::from_str(
         r#"{
             "pubkey": "abcd1234",
@@ -155,7 +157,7 @@ fn managed_agent_record_without_respond_to_fields_defaults_to_owner_only() {
         }"#,
     )
     .expect("legacy record without respond_to fields should deserialize");
-    assert_eq!(record.respond_to, RespondTo::OwnerOnly);
+    assert_eq!(record.respond_to, RespondTo::Anyone);
     assert!(record.respond_to_allowlist.is_empty());
 }
 
