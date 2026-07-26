@@ -25,7 +25,7 @@ export function EditRespondToDialog({
   open: boolean;
 }) {
   const updateMutation = useUpdateManagedAgentMutation();
-  const [respondTo, setRespondTo] = React.useState<RespondToMode>("owner-only");
+  const [respondTo, setRespondTo] = React.useState<RespondToMode>("anyone");
   const [respondToAllowlist, setRespondToAllowlist] = React.useState<string[]>(
     [],
   );

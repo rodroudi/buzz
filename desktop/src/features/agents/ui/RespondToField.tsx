@@ -25,8 +25,9 @@ import type { PersonaDropdownOption } from "./agentConfigOptions";
  * Inbound author gate UI for create/edit agent dialogs.
  *
  * Dropdown:
- *   - Only me        (default; maps to `buzz-acp --respond-to=owner-only`)
- *   - Anyone         (`--respond-to=anyone` — fully open agent)
+*   - Only me        (maps to `buzz-acp --respond-to=owner-only`)
+ *   - Anyone         (default on the BP fork; `--respond-to=anyone` — fully
+ *                     open bot on our closed team relay)
  *   - Selected people (`--respond-to=allowlist`, plus the selected pubkeys as
  *                     `--respond-to-allowlist`)
  *
@@ -67,8 +68,8 @@ function formatSearchUserSecondary(user: UserSearchResult) {
 }
 
 const RESPOND_TO_OPTIONS: PersonaDropdownOption[] = [
-  { label: "Only me (default)", value: "owner-only" },
-  { label: "Anyone", value: "anyone" },
+  { label: "Only me", value: "owner-only" },
+  { label: "Anyone (default)", value: "anyone" },
   { label: "Selected people", value: "allowlist" },
 ];
 

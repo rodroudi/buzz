@@ -161,7 +161,7 @@ export type RawManagedAgent = {
   auto_restart_on_config_change?: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
-  // Pre-feature fixtures may omit these; mapped to "owner-only"/[] in fromRawManagedAgent.
+  // Pre-feature fixtures may omit these; mapped to "anyone"/[] in fromRawManagedAgent (BP fork default).
   respond_to?: ManagedAgent["respondTo"];
   respond_to_allowlist?: string[];
 };
@@ -729,7 +729,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     autoRestartOnConfigChange: agent.auto_restart_on_config_change ?? true,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,
-    respondTo: agent.respond_to ?? "owner-only",
+    respondTo: agent.respond_to ?? "anyone",
     respondToAllowlist: agent.respond_to_allowlist ?? [],
   };
 }

@@ -1649,7 +1649,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     auto_restart_on_config_change: agent.auto_restart_on_config_change ?? true,
     backend: agent.backend ?? { type: "local" as const },
     backend_agent_id: agent.backend_agent_id ?? null,
-    respond_to: agent.respond_to ?? "owner-only",
+    respond_to: agent.respond_to ?? "anyone",
     respond_to_allowlist: agent.respond_to_allowlist
       ? [...agent.respond_to_allowlist]
       : [],
@@ -2203,7 +2203,7 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
     auto_restart_on_config_change: seed.autoRestartOnConfigChange ?? true,
     backend: seed.backend ?? { type: "local" },
     backend_agent_id: null,
-    respond_to: seed.respondTo ?? "owner-only",
+    respond_to: seed.respondTo ?? "anyone",
     respond_to_allowlist: seed.respondToAllowlist ?? [],
     private_key_nsec: `nsec1mock${seed.pubkey.slice(0, 20)}`,
     log_lines: [
@@ -2237,7 +2237,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
       channel_ids: channels.map((channel) => channel.id),
       capabilities: seed.capabilities ?? ["messages", "channels", "mcp"],
       status: seed.status ?? "online",
-      respond_to: seed.respondTo ?? "owner-only",
+      respond_to: seed.respondTo ?? "anyone",
       respond_to_allowlist: seed.respondToAllowlist ?? [],
     });
   }
@@ -8308,7 +8308,7 @@ async function handleCreateManagedAgent(
   const mintRespondTo =
     args.input.respondTo ??
     (linkedPersona?.respond_to as RawManagedAgent["respond_to"] | null) ??
-    "owner-only";
+    "anyone";
   const mintRespondToAllowlist =
     args.input.respondTo !== undefined
       ? (args.input.respondToAllowlist ?? [])
