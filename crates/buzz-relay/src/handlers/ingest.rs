@@ -2594,17 +2594,23 @@ async fn ingest_event_inner(
 
         // Validate visibility/channel_type for ALL kind:9007 events (with or without h-tag).
         // This runs pre-storage so invalid enums are rejected before the event is persisted.
-        let visibility_str = event
-            .tags
-            .iter()
-            .find_map(|t| {
-                if t.kind().to_string() == "visibility" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "open".to_string());
+        let requested_visibility = event.tags.iter().find_map(|t| {
+            if t.kind().to_string() == "visibility" {
+                t.content().map(|s| s.to_string())
+            } else {
+                None
+            }
+        });
+        // Authoritative create path when the client supplies its own channel UUID
+        // (Desktop and the CLI both do): this is what actually calls
+        // create_channel_with_id, while handle_create_group only fetches the row
+        // it created. force_private_channels must therefore coerce HERE — coercing
+        // only in the side-effect handler logs a warning but writes `open`.
+        let visibility_str = if state.config.force_private_channels {
+            "private".to_string()
+        } else {
+            requested_visibility.unwrap_or_else(|| "open".to_string())
+        };
         let channel_type_str = event
             .tags
             .iter()
