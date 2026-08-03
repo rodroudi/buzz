@@ -485,6 +485,40 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
     pub respond_to_allowlist: Option<Vec<String>>,
 
+    /// Let `--respond-to=anyone` apply inside DMs too.
+    ///
+    /// By default DMs are hardened to the owner and verified same-owner siblings
+    /// regardless of `--respond-to`, because clients auto-p-tag every DM
+    /// participant (see `author_allowed`). That default is right for an agent
+    /// holding private data — Coach Bill, a bookkeeping agent — where a DM from
+    /// the wrong teammate is a disclosure.
+    ///
+    /// Set this ONLY for an agent that is meant to be a shared team assistant on
+    /// a membership-gated relay, where `anyone` already means "any vetted member"
+    /// and that same set can already prompt it in a public channel. Opt-in per
+    /// agent, never fleet-wide: several personas share one buzz-acp binary.
+    ///
+    /// No effect unless `--respond-to=anyone`.
+    #[arg(long, env = "BUZZ_ACP_DM_ALLOW_ANYONE")]
+    pub dm_allow_anyone: bool,
+
+    /// Comma-separated 64-char hex pubkeys permitted to DM this agent, in
+    /// addition to the owner and verified same-owner siblings.
+    ///
+    /// This is the middle ground between the hardened default (owner only) and
+    /// `--dm-allow-anyone` (every relay member, which on a relay with invited
+    /// external guests includes those guests). An explicit list carries none of
+    /// the transitive-grant risk that makes `anyone` unsafe in DMs: membership
+    /// is a fixed operator-provided set, not "whoever ends up p-tagged".
+    ///
+    /// Unlike `--respond-to-allowlist`, this applies regardless of
+    /// `--respond-to`, so an agent can keep answering channel mentions from
+    /// anyone while restricting DMs to named teammates. Empty (the default)
+    /// preserves the hardened behavior, so newly invited members and guests are
+    /// excluded until explicitly added.
+    #[arg(long, env = "BUZZ_ACP_DM_ALLOWLIST", value_delimiter = ',')]
+    pub dm_allowlist: Option<Vec<String>>,
+
     /// Comma-separated list of allowed `--respond-to` modes.
     /// When set, the harness rejects startup if `--respond-to` is not in this list.
     /// Modes: owner-only, allowlist, anyone, nobody.
@@ -584,6 +618,12 @@ pub struct Config {
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
     pub respond_to_allowlist: HashSet<String>,
+    /// Whether `respond_to == Anyone` also applies inside DMs. Opt-in; see
+    /// `Args::dm_allow_anyone` for why the hardened default exists.
+    pub dm_allow_anyone: bool,
+    /// Validated pubkeys allowed to DM this agent on top of owner/siblings.
+    /// Applies regardless of `respond_to`. Empty = hardened default.
+    pub dm_allowlist: HashSet<String>,
     /// Allowed `respond_to` modes. Empty = all modes allowed.
     pub allowed_respond_to: Vec<String>,
     /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL, BUZZ_AGENT_MODEL).
@@ -679,13 +719,13 @@ pub(crate) fn compose_session_title(agent: &str, channel_name: Option<&str>) -> 
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
-fn validate_allowlist(entries: &[String]) -> Result<HashSet<String>, ConfigError> {
+fn validate_allowlist(entries: &[String], flag: &str) -> Result<HashSet<String>, ConfigError> {
     let mut validated = HashSet::new();
     for entry in entries {
         let trimmed = entry.trim().to_ascii_lowercase();
         if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(ConfigError::ConfigFile(format!(
-                "invalid pubkey in --respond-to-allowlist: '{entry}' \
+                "invalid pubkey in {flag}: '{entry}' \
                  (must be exactly 64 hex characters)"
             )));
         }
@@ -1053,7 +1093,7 @@ impl Config {
                     "--respond-to=allowlist requires --respond-to-allowlist with at least one pubkey".into(),
                 ));
             }
-            validate_allowlist(&raw)?
+            validate_allowlist(&raw, "--respond-to-allowlist")?
         } else {
             if args.respond_to_allowlist.is_some() {
                 tracing::warn!(
@@ -1061,6 +1101,14 @@ impl Config {
                 );
             }
             HashSet::new()
+        };
+
+        // Validated independently of respond_to: the DM gate is a separate axis
+        // from the channel gate, so an agent can answer channel mentions from
+        // anyone while accepting DMs only from named teammates.
+        let dm_allowlist = match args.dm_allowlist {
+            Some(raw) if !raw.is_empty() => validate_allowlist(&raw, "--dm-allowlist")?,
+            _ => HashSet::new(),
         };
 
         // Validate respond_to against the allowed set.
@@ -1149,6 +1197,8 @@ impl Config {
             permission_mode: args.permission_mode,
             respond_to: args.respond_to,
             respond_to_allowlist,
+            dm_allow_anyone: args.dm_allow_anyone,
+            dm_allowlist,
             allowed_respond_to,
             persona_env_vars,
             has_generated_codex_config,
@@ -1172,6 +1222,23 @@ impl Config {
             }
             other => format!("respond_to={other}"),
         };
+        // Surfaced in the startup line because it widens who may prompt the agent
+        // privately. An operator reading logs must be able to see that without
+        // reconstructing it from the process cmdline. Only shown when set, so the
+        // hardened default stays quiet.
+        let dm_allow_anyone_detail = if self.dm_allow_anyone {
+            " dm_allow_anyone=true"
+        } else {
+            ""
+        };
+        // Same reasoning as dm_allow_anyone: an operator must be able to see who
+        // may DM this agent without reconstructing it from the cmdline. Count
+        // only — the pubkeys themselves would bloat every startup line.
+        let dm_allowlist_detail = if self.dm_allowlist.is_empty() {
+            String::new()
+        } else {
+            format!(" dm_allowlist={}", self.dm_allowlist.len())
+        };
         let allowed_respond_to_detail = if self.allowed_respond_to.is_empty() {
             String::new()
         } else {
@@ -1180,7 +1247,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}{}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1203,6 +1270,8 @@ impl Config {
             self.permission_mode,
             respond_to_detail,
             allowed_respond_to_detail,
+            dm_allow_anyone_detail,
+            dm_allowlist_detail,
         )
     }
 }
@@ -1523,6 +1592,8 @@ mod tests {
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
+            dm_allow_anyone: false,
+            dm_allowlist: HashSet::new(),
             allowed_respond_to: Vec::new(),
             persona_env_vars: vec![],
             has_generated_codex_config: false,
@@ -2566,7 +2637,7 @@ channels = "ALL"
     #[test]
     fn test_validate_allowlist_valid_entries() {
         let entries = vec!["ab".repeat(32), "cd".repeat(32)];
-        let result = validate_allowlist(&entries).unwrap();
+        let result = validate_allowlist(&entries, "--respond-to-allowlist").unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -2574,7 +2645,7 @@ channels = "ALL"
     fn test_validate_allowlist_deduplicates() {
         let pk = "ab".repeat(32);
         let entries = vec![pk.clone(), pk.clone(), pk];
-        let result = validate_allowlist(&entries).unwrap();
+        let result = validate_allowlist(&entries, "--respond-to-allowlist").unwrap();
         assert_eq!(result.len(), 1);
     }
 
@@ -2583,7 +2654,7 @@ channels = "ALL"
         let upper = "AB".repeat(32);
         let lower = "ab".repeat(32);
         let entries = vec![upper, lower];
-        let result = validate_allowlist(&entries).unwrap();
+        let result = validate_allowlist(&entries, "--respond-to-allowlist").unwrap();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&"ab".repeat(32)));
     }
@@ -2591,7 +2662,7 @@ channels = "ALL"
     #[test]
     fn test_validate_allowlist_trims_whitespace() {
         let entries = vec![format!("  {}  ", "ab".repeat(32))];
-        let result = validate_allowlist(&entries).unwrap();
+        let result = validate_allowlist(&entries, "--respond-to-allowlist").unwrap();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&"ab".repeat(32)));
     }
@@ -2599,7 +2670,7 @@ channels = "ALL"
     #[test]
     fn test_validate_allowlist_rejects_short() {
         let entries = vec!["abcd".to_string()];
-        let err = validate_allowlist(&entries).unwrap_err();
+        let err = validate_allowlist(&entries, "--respond-to-allowlist").unwrap_err();
         assert!(
             err.to_string()
                 .contains("must be exactly 64 hex characters"),
@@ -2610,7 +2681,7 @@ channels = "ALL"
     #[test]
     fn test_validate_allowlist_rejects_non_hex() {
         let entries = vec!["zz".repeat(32)];
-        let err = validate_allowlist(&entries).unwrap_err();
+        let err = validate_allowlist(&entries, "--respond-to-allowlist").unwrap_err();
         assert!(
             err.to_string()
                 .contains("must be exactly 64 hex characters"),
@@ -2621,7 +2692,7 @@ channels = "ALL"
     #[test]
     fn test_validate_allowlist_rejects_too_long() {
         let entries = vec!["ab".repeat(33)]; // 66 chars
-        let err = validate_allowlist(&entries).unwrap_err();
+        let err = validate_allowlist(&entries, "--respond-to-allowlist").unwrap_err();
         assert!(
             err.to_string()
                 .contains("must be exactly 64 hex characters"),
@@ -2631,7 +2702,7 @@ channels = "ALL"
 
     #[test]
     fn test_validate_allowlist_empty_is_ok() {
-        let result = validate_allowlist(&[]).unwrap();
+        let result = validate_allowlist(&[], "--respond-to-allowlist").unwrap();
         assert!(result.is_empty());
     }
 

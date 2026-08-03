@@ -248,18 +248,50 @@ async fn is_owner_or_sibling(
 /// siblings may fire a turn — the explicit allowlist and `anyone` mode do
 /// NOT apply inside DMs. `Nobody` still drops everything. Callers must
 /// resolve `is_dm` fail-closed: unknown channel type ⇒ treat as DM.
+///
+/// # Opting out of DM hardening (`dm_allow_anyone`)
+///
+/// A shared team assistant on a membership-gated relay is the one case where the
+/// hardening is counterproductive: `anyone` there already means "any vetted
+/// member", and that identical set can already prompt the agent by @-mentioning
+/// it in a public channel — so refusing DMs restricts *where* they can ask
+/// without restricting *who*. `--dm-allow-anyone` lifts the restriction for that
+/// case only, and only when `respond_to == Anyone`.
+///
+/// It is deliberately opt-in per agent rather than a default, because several
+/// personas share one buzz-acp binary and some of them hold data that must not
+/// answer a DM from the wrong teammate. `OwnerOnly` and `Allowlist` keep the
+/// hardening unconditionally — the transitive-access-grant hole the flag docs
+/// describe is a real risk for allowlist mode, where the operator named specific
+/// pubkeys and cannot have intended "plus anyone who lands in a DM".
+///
+/// `--dm-allowlist` is the narrow middle option: DMs from an explicit set of
+/// pubkeys, which cannot be widened by p-tagging the way `anyone` can.
+// Pure predicate over independent inputs — grouping them into a struct would add
+// a type without removing a decision, and every argument is read exactly once.
+#[allow(clippy::too_many_arguments)]
 async fn author_allowed(
     respond_to: &RespondTo,
     allowlist: &HashSet<String>,
     author: &str,
     is_dm: bool,
+    dm_allow_anyone: bool,
+    dm_allowlist: &HashSet<String>,
     owner_cache: &OwnerCache,
     rest_client: &relay::RestClient,
 ) -> bool {
-    if is_dm {
+    if is_dm && !(dm_allow_anyone && *respond_to == RespondTo::Anyone) {
         return match respond_to {
+            // `nobody` stays absolute — an explicit DM allowlist must not
+            // resurrect an agent that was deliberately muted.
             RespondTo::Nobody => false,
-            _ => is_owner_or_sibling(author, owner_cache, rest_client).await,
+            // An explicit pubkey list is safe here in a way `anyone` is not:
+            // it cannot be widened by whoever happens to get p-tagged into a
+            // DM, so invited guests stay excluded until named.
+            _ => {
+                dm_allowlist.contains(author)
+                    || is_owner_or_sibling(author, owner_cache, rest_client).await
+            }
         };
     }
     match respond_to {
@@ -2896,6 +2928,8 @@ async fn tokio_main() -> Result<()> {
                                     &config.respond_to_allowlist,
                                     &author,
                                     is_dm,
+                                    config.dm_allow_anyone,
+                                    &config.dm_allowlist,
                                     &owner_cache,
                                     &ctx.rest_client,
                                 )
@@ -5389,6 +5423,8 @@ mod author_gate_tests {
                 &allowlist,
                 SIBLING,
                 false,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5407,6 +5443,8 @@ mod author_gate_tests {
                 &allowlist,
                 EXTERNAL,
                 false,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5425,6 +5463,8 @@ mod author_gate_tests {
                 &allowlist,
                 STRANGER,
                 false,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5443,6 +5483,8 @@ mod author_gate_tests {
                 &allowlist,
                 OWNER,
                 false,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5464,6 +5506,8 @@ mod author_gate_tests {
                 &HashSet::new(),
                 STRANGER,
                 false,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5482,6 +5526,8 @@ mod author_gate_tests {
                     &HashSet::new(),
                     who,
                     false,
+                    false,
+                    &HashSet::new(),
                     &cache,
                     &dummy_rest_client()
                 )
@@ -5508,6 +5554,8 @@ mod author_gate_tests {
                 &allowlist,
                 EXTERNAL,
                 true,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5525,11 +5573,158 @@ mod author_gate_tests {
                 &HashSet::new(),
                 STRANGER,
                 true,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
             .await,
             "respond_to=anyone must still drop non-owner authors inside a DM"
+        );
+    }
+
+    /// `--dm-allow-anyone` is the documented opt-out for a shared team assistant
+    /// on a membership-gated relay. It must lift the DM restriction only for
+    /// `Anyone` — see `author_allowed`'s doc comment.
+    #[tokio::test]
+    async fn test_dm_allow_anyone_admits_stranger_under_anyone() {
+        let cache = cache_with_sibling();
+        assert!(
+            author_allowed(
+                &RespondTo::Anyone,
+                &HashSet::new(),
+                STRANGER,
+                true,
+                true,
+                &HashSet::new(),
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "dm_allow_anyone + respond_to=anyone must admit any author inside a DM"
+        );
+    }
+
+    /// The flag must not become a blanket bypass: allowlist mode named specific
+    /// pubkeys and cannot have meant "plus whoever lands in a DM".
+    #[tokio::test]
+    async fn test_dm_allow_anyone_does_not_widen_allowlist_or_owner_only() {
+        let cache = cache_with_sibling();
+        let allowlist = HashSet::from([EXTERNAL.to_string()]);
+        for mode in [RespondTo::Allowlist, RespondTo::OwnerOnly] {
+            assert!(
+                !author_allowed(
+                    &mode,
+                    &allowlist,
+                    EXTERNAL,
+                    true,
+                    true,
+                    &HashSet::new(),
+                    &cache,
+                    &dummy_rest_client()
+                )
+                .await,
+                "dm_allow_anyone must not relax DM hardening for {mode}"
+            );
+        }
+    }
+
+    /// And it must be inert outside DMs, where `Anyone` already admits everyone.
+    #[tokio::test]
+    async fn test_dm_allow_anyone_is_inert_outside_dms() {
+        let cache = cache_with_sibling();
+        assert!(
+            !author_allowed(
+                &RespondTo::Nobody,
+                &HashSet::new(),
+                STRANGER,
+                false,
+                true,
+                &HashSet::new(),
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "dm_allow_anyone must never override respond_to=nobody"
+        );
+    }
+
+    /// `--dm-allowlist` is the middle ground between the hardened default and
+    /// `--dm-allow-anyone`: named teammates can DM the agent while everyone else
+    /// — including relay members invited later as guests — stays excluded.
+    #[tokio::test]
+    async fn test_dm_allowlist_admits_listed_author_but_not_a_guest() {
+        let cache = cache_with_sibling();
+        let dm_allowlist = HashSet::from([EXTERNAL.to_string()]);
+        assert!(
+            author_allowed(
+                &RespondTo::Anyone,
+                &HashSet::new(),
+                EXTERNAL,
+                true,
+                false,
+                &dm_allowlist,
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "a listed non-owner must be able to DM the agent"
+        );
+        assert!(
+            !author_allowed(
+                &RespondTo::Anyone,
+                &HashSet::new(),
+                STRANGER,
+                true,
+                false,
+                &dm_allowlist,
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "an unlisted author (a guest) must NOT be able to DM the agent"
+        );
+    }
+
+    /// The DM allowlist is a DM-only axis: it must not widen the channel gate,
+    /// so an agent restricted to its owner in channels stays that way.
+    #[tokio::test]
+    async fn test_dm_allowlist_does_not_widen_the_channel_gate() {
+        let cache = cache_with_sibling();
+        let dm_allowlist = HashSet::from([EXTERNAL.to_string()]);
+        assert!(
+            !author_allowed(
+                &RespondTo::OwnerOnly,
+                &HashSet::new(),
+                EXTERNAL,
+                false,
+                false,
+                &dm_allowlist,
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "dm_allowlist must not admit a listed author outside DMs under owner-only"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dm_allowlist_never_overrides_respond_to_nobody() {
+        let cache = cache_with_sibling();
+        let dm_allowlist = HashSet::from([EXTERNAL.to_string()]);
+        assert!(
+            !author_allowed(
+                &RespondTo::Nobody,
+                &HashSet::new(),
+                EXTERNAL,
+                true,
+                false,
+                &dm_allowlist,
+                &cache,
+                &dummy_rest_client()
+            )
+            .await,
+            "a muted agent must stay muted even for a listed DM author"
         );
     }
 
@@ -5548,6 +5743,8 @@ mod author_gate_tests {
                         &HashSet::new(),
                         who,
                         true,
+                        false,
+                        &HashSet::new(),
                         &cache,
                         &dummy_rest_client()
                     )
@@ -5567,6 +5764,8 @@ mod author_gate_tests {
                 &HashSet::new(),
                 OWNER,
                 true,
+                false,
+                &HashSet::new(),
                 &cache,
                 &dummy_rest_client()
             )
@@ -5707,6 +5906,8 @@ mod author_gate_tests {
                 &allowlist,
                 EXTERNAL,
                 is_dm,
+                false,
+                &HashSet::new(),
                 &owner_cache,
                 &dummy_rest_client(),
             )
@@ -6808,6 +7009,8 @@ mod build_mcp_servers_tests {
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
+            dm_allow_anyone: false,
+            dm_allowlist: HashSet::new(),
             allowed_respond_to: vec![],
             persona_env_vars: vec![],
             has_generated_codex_config: false,
@@ -7033,6 +7236,8 @@ mod error_outcome_emission_tests {
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
+            dm_allow_anyone: false,
+            dm_allowlist: HashSet::new(),
             allowed_respond_to: vec![],
             persona_env_vars: vec![],
             has_generated_codex_config: false,
