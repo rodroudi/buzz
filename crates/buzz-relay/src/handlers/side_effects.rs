@@ -547,6 +547,15 @@ pub async fn validate_admin_event(
             for t in event.tags.iter() {
                 if t.kind().to_string() == "visibility" {
                     match t.content() {
+                        // Reopening is rejected rather than coerced: unlike create,
+                        // the caller already has a working channel, so silently
+                        // ignoring the request would report success while leaving
+                        // visibility unchanged.
+                        Some("open") if state.config.force_private_channels => {
+                            return Err(anyhow::anyhow!(
+                                "visibility=open is disabled on this relay (force_private_channels)"
+                            ));
+                        }
                         Some("open") | Some("private") => {}
                         Some(v) => {
                             return Err(anyhow::anyhow!(
@@ -1765,8 +1774,25 @@ async fn handle_create_group(
 ) -> anyhow::Result<()> {
     let name =
         extract_tag_value(event, "name").ok_or_else(|| anyhow::anyhow!("missing name tag"))?;
-    let visibility_str =
-        extract_tag_value(event, "visibility").unwrap_or_else(|| "open".to_string());
+    // An absent visibility tag defaults to `open`, which grants every relay
+    // member access with no membership row. Under force_private_channels we
+    // coerce instead of rejecting: the channel is still created (clients that
+    // omit the tag, or explicitly ask for `open`, keep working) but it can never
+    // be a workspace-wide broadcast. Coercion of an explicit request is logged.
+    let visibility_str = if state.config.force_private_channels {
+        if let Some(requested) = extract_tag_value(event, "visibility") {
+            if requested != "private" {
+                warn!(
+                    channel_name = %name,
+                    requested = %requested,
+                    "force_private_channels: coercing requested channel visibility to private"
+                );
+            }
+        }
+        "private".to_string()
+    } else {
+        extract_tag_value(event, "visibility").unwrap_or_else(|| "open".to_string())
+    };
     let channel_type_str =
         extract_tag_value(event, "channel_type").unwrap_or_else(|| "stream".to_string());
 

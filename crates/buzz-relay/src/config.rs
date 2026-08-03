@@ -218,6 +218,34 @@ pub struct Config {
     /// Default: `false`. Set via `BUZZ_ALLOW_NIP_OA_AUTH=true`.
     pub allow_nip_oa_auth: bool,
 
+    /// Force every channel on this relay to be private.
+    ///
+    /// An `open` channel is readable and postable by **any** relay member with
+    /// no membership row, because the access check falls through to
+    /// `visibility = 'open'`. On a relay that hosts private business channels
+    /// and external guests, that makes "open" a workspace-wide broadcast. With
+    /// this set:
+    ///
+    /// - `kind:9007` (create) coerces visibility to `private`, including the
+    ///   case where the tag is absent — which otherwise defaults to `open` and
+    ///   silently exposes channels created by clients that omit it.
+    /// - `kind:9002` (edit metadata) rejects `visibility=open`, so a private
+    ///   channel cannot later be reopened.
+    ///
+    /// Net effect: any channel created or edited from here on requires an
+    /// explicit `channel_members` row.
+    ///
+    /// NOT retroactive. The access check reads `visibility` from the stored row
+    /// (`check_channel_membership`), and the accessible-channel query still
+    /// unions every `visibility = 'open'` row, so channels that were already
+    /// open stay open until they are converted — e.g. `buzz channels update
+    /// --channel <id> --visibility private`. Enabling this on an existing relay
+    /// closes the door for new channels; it does not sweep the old ones.
+    ///
+    /// Default `false` (upstream behavior). Set via
+    /// `BUZZ_FORCE_PRIVATE_CHANNELS=true`.
+    pub force_private_channels: bool,
+
     /// Media storage configuration (S3/MinIO).
     pub media: buzz_media::MediaConfig,
     /// Maximum concurrent media uploads handled by one relay process.
@@ -628,6 +656,10 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        let force_private_channels = std::env::var("BUZZ_FORCE_PRIVATE_CHANNELS")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
         // Note: intentionally not prefixed with BUZZ_ — this is a relay-identity
         // config that may be shared across multiple services (e.g., ACP agent).
         let relay_owner_pubkey = std::env::var("RELAY_OWNER_PUBKEY")
@@ -1019,6 +1051,7 @@ impl Config {
             relay_operator_api_origin,
             relay_operator_pubkeys,
             allow_nip_oa_auth,
+            force_private_channels,
             media,
             media_max_concurrent_uploads,
             media_max_concurrent_uploads_per_pubkey,
@@ -1139,6 +1172,10 @@ mod tests {
         assert!(
             !config.allow_nip_oa_auth,
             "allow_nip_oa_auth should default to false"
+        );
+        assert!(
+            !config.force_private_channels,
+            "force_private_channels should default to false (upstream behavior)"
         );
         assert!(
             !config.serve_git_web_gui,
