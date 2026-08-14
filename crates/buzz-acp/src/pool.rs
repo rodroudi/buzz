@@ -2330,10 +2330,7 @@ pub async fn run_prompt_task(
         }
         Err(e) => {
             tracing::error!(target: "pool::prompt", "session_prompt error: {e}");
-            // AgentError means the agent caught a problem before mutating
-            // session state (e.g. bad LLM response). The session is healthy —
-            // don't invalidate it. Other errors may have corrupted state.
-            if !matches!(e, AcpError::AgentError { .. }) {
+            if should_invalidate_after_prompt_error(&e) {
                 agent.state.invalidate(&source);
             }
             let usage = agent.acp.take_turn_usage();
@@ -2357,6 +2354,18 @@ pub async fn run_prompt_task(
         }
     }
     // _reaction_guard drops here → spawns clear_reactions for all exit paths.
+}
+
+/// Whether a failed prompt should drop the cached session for its source.
+///
+/// AgentError means the agent caught a problem before mutating session state
+/// (e.g. bad LLM response) — the session is healthy, keep it so the retry
+/// preserves context. The exception is an agent that no longer knows the
+/// session at all (see [`AcpError::indicates_stale_session`]): retrying that
+/// id fails identically every attempt, so drop it and let the next attempt
+/// create a fresh session. All other errors may have corrupted state.
+fn should_invalidate_after_prompt_error(e: &AcpError) -> bool {
+    !matches!(e, AcpError::AgentError { .. }) || e.indicates_stale_session()
 }
 
 /// Retry wrapper for context fetches: one retry with `CONTEXT_FETCH_RETRY_DELAY`
@@ -4029,6 +4038,29 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;
+
+    #[test]
+    fn prompt_error_invalidation_spares_agent_errors_except_stale_session() {
+        // Transport-level failures may have corrupted session state — drop it.
+        assert!(should_invalidate_after_prompt_error(&AcpError::Protocol(
+            "bad frame".into()
+        )));
+        // Agent-reported errors leave the session intact…
+        assert!(!should_invalidate_after_prompt_error(
+            &AcpError::AgentError {
+                code: -32000,
+                message: "bad response".into(),
+            }
+        ));
+        // …unless the agent says the session no longer exists — retrying
+        // that id would fail every attempt until dead-letter.
+        assert!(should_invalidate_after_prompt_error(
+            &AcpError::AgentError {
+                code: -32603,
+                message: r#"Internal error — {"details":"Session ses_x not found"}"#.into(),
+            }
+        ));
+    }
 
     fn test_mcp_server() -> McpServer {
         McpServer {

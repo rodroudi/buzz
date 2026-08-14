@@ -108,14 +108,38 @@ pub enum AcpError {
     AgentError { code: i64, message: String },
 }
 
+impl AcpError {
+    /// True when an [`AcpError::AgentError`] says the prompted session no
+    /// longer exists on the agent side (e.g. openclaw-acp reaps sessions
+    /// idle >24h from its in-memory store and then answers `session/prompt`
+    /// with "Session <id> not found" inside a -32603 Internal error).
+    ///
+    /// Retrying such an error with the same session id can never succeed, so
+    /// the caller must invalidate its cached session and create a fresh one.
+    pub fn indicates_stale_session(&self) -> bool {
+        match self {
+            AcpError::AgentError { message, .. } => {
+                let msg = message.to_ascii_lowercase();
+                msg.contains("session") && msg.contains("not found")
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Build an [`AcpError::AgentError`] from a JSON-RPC error object,
-/// preserving the numeric code. When the `message` field is missing or
-/// non-string, fall back to the full JSON object so provider-specific
-/// detail (e.g. a `data` field) is not lost.
+/// preserving the numeric code. A `data` field is appended to the message
+/// (agents bury actionable detail there — e.g. openclaw-acp's
+/// "Session … not found" under a generic "Internal error"). When the
+/// `message` field is missing or non-string, fall back to the full JSON
+/// object so provider-specific detail is not lost.
 fn agent_error_from_json(error: &serde_json::Value) -> AcpError {
     let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-32000);
     let message = match error.get("message").and_then(|m| m.as_str()) {
-        Some(m) => m.to_string(),
+        Some(m) => match error.get("data") {
+            Some(data) => format!("{m} — {data}"),
+            None => m.to_string(),
+        },
         None => error.to_string(),
     };
     AcpError::AgentError { code, message }
@@ -4375,6 +4399,58 @@ mod tests {
             AcpError::AgentError { code, message } => {
                 assert_eq!(code, -32001);
                 assert_eq!(message, "auth denied");
+            }
+            other => panic!("expected AgentError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn indicates_stale_session_matches_session_not_found_agent_errors() {
+        // The exact shape openclaw-acp emits after its 24h idle reaper
+        // drops a session: retrying this id can never succeed.
+        let stale = super::agent_error_from_json(&serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "details": "Session 1f755944-abb8-4ef8-8953-3c2e92a28599 not found" }
+        }));
+        assert!(stale.indicates_stale_session());
+
+        // Unrelated agent errors leave the session alone.
+        let unrelated = AcpError::AgentError {
+            code: -32001,
+            message: "auth denied".into(),
+        };
+        assert!(!unrelated.indicates_stale_session());
+
+        // "not found" about something other than the session must not match.
+        let tool = AcpError::AgentError {
+            code: -32602,
+            message: "tool web_search not found".into(),
+        };
+        assert!(!tool.indicates_stale_session());
+
+        // Non-AgentError variants are handled by their own match arms.
+        assert!(!AcpError::Protocol("session not found".into()).indicates_stale_session());
+    }
+
+    #[test]
+    fn agent_error_from_json_appends_data_to_message() {
+        // openclaw-acp reports a reaped session as code -32603 / "Internal
+        // error" with the tell-tale detail only in `data.details`. If `data`
+        // is dropped when `message` is present, the surfaced error is opaque
+        // and stale-session detection has nothing to match on.
+        let error = serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "details": "Session ses_x not found" }
+        });
+        match super::agent_error_from_json(&error) {
+            AcpError::AgentError { code, message } => {
+                assert_eq!(code, -32603);
+                assert!(
+                    message.contains("Session ses_x not found"),
+                    "expected data details preserved in message, got: {message}"
+                );
             }
             other => panic!("expected AgentError, got {other:?}"),
         }
