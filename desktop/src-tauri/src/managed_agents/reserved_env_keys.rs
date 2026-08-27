@@ -73,6 +73,12 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     // for same-session sweep decisions.
     "BUZZ_MANAGED_AGENT",
     "BUZZ_MANAGED_AGENT_START_NONCE",
+    // Same class as the respond-to gate, and higher stakes: these decide who
+    // may prompt the agent *privately*. An ambient or saved override could
+    // widen DMs to every relay member — including externally invited guests —
+    // without the change being visible in the UI.
+    "BUZZ_ACP_DM_ALLOW_ANYONE",
+    "BUZZ_ACP_DM_ALLOWLIST",
 ];
 
 pub(crate) fn is_reserved_env_key(key: &str) -> bool {
